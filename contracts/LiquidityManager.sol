@@ -149,14 +149,8 @@ contract LiquidityManager is Ownable, ReentrancyGuard, ILiquidityManager {
     }
 
     function _getPair() internal view returns (address) {
-        // In Joe V1/Uniswap V2, pair address is deterministic or queried from factory.
-        // For now, let's assume we can get it or stored it.
-        // We can query factory. But implementation-wise, let's assume standard V2.
-        // IJoeFactory(router.factory()).getPair(...)
-        // Since we don't have Factory interface imported, and for this demo we can't easily find it without address.
-        // We will return a placeholder address(0) which will fail if executed on chain, but pass compilation.
-        // In production, instantiate Factory interface.
-        return address(0); // FIXME: Implement getPair lookup properly for production
+        address factory = 0xF5c7d9733e5f53abCC1695820c4818C59B457C2C;
+        return IJoeFactory(factory).getPair(address(audb), address(collateral));
     }
 
     // Admin functions to rescue tokens
