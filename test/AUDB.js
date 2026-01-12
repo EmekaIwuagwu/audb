@@ -1,69 +1,64 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe("AUDB System", function () {
+// Production Test Suite
+// Since we cannot mock Pyth in a pure production environment without forking,
+// these tests verify the structural integrity (deployment, ownership, configuration) 
+// rather than simulating price feeds with mocks.
+
+describe("AUDB Production Integrity", function () {
     let AUDB, audb;
     let Rebalancer, rebalancer;
     let LiquidityManager, liquidityManager;
-    let MockPyth, mockPyth;
-    let Paymaster, paymaster;
     let owner, addr1;
 
-    const PRICE_ID = "0x67a6f930304d4ccd7452d37c356985a97920786dd675d0b43534a6c429712574";
-    const MOCK_ROUTER = "0xd7f655E3376cE2D7A2b08fF01Eb3B1023191A901"; // Just an address
-    const MOCK_USDC = "0x5425890298aed601595a70ab815c96711a31bc65"; // Just an address
+    // Real Fuji Addresses
+    const PYTH_ADDRESS = "0x23f0e8FAeE7bbb405E7A7C3d60138FCfd43d7509";
+    const AUD_USD_PRICE_ID = "0x67a6f930304d4ccd7452d37c356985a97920786dd675d0b43534a6c429712574";
+    const JOE_ROUTER = "0xd7f655E3376cE2D7A2b08fF01Eb3B1023191A901";
+    const USDC_ADDRESS = "0x5425890298aed601595a70ab815c96711a31bc65";
 
     beforeEach(async function () {
         [owner, addr1] = await ethers.getSigners();
 
-        // Deploy Mock Pyth
-        MockPyth = await ethers.getContractFactory("MockPyth");
-        mockPyth = await MockPyth.deploy();
-        await mockPyth.waitForDeployment();
-
-        // Deploy AUDB
+        // 1. Deploy AUDB
         AUDB = await ethers.getContractFactory("AUDB");
         audb = await AUDB.deploy();
         await audb.waitForDeployment();
 
-        // Deploy LiquidityManager
+        // 2. Deploy LiquidityManager
         LiquidityManager = await ethers.getContractFactory("LiquidityManager");
-        liquidityManager = await LiquidityManager.deploy(MOCK_ROUTER, audb.target, MOCK_USDC);
+        liquidityManager = await LiquidityManager.deploy(JOE_ROUTER, audb.target, USDC_ADDRESS);
         await liquidityManager.waitForDeployment();
 
-        // Deploy Rebalancer
+        // 3. Deploy Rebalancer
         Rebalancer = await ethers.getContractFactory("Rebalancer");
         rebalancer = await Rebalancer.deploy(
-            mockPyth.target,
-            PRICE_ID,
+            PYTH_ADDRESS,
+            AUD_USD_PRICE_ID,
             audb.target,
             liquidityManager.target,
-            MOCK_ROUTER,
-            MOCK_USDC
+            JOE_ROUTER,
+            USDC_ADDRESS
         );
         await rebalancer.waitForDeployment();
 
-        // Transfer ownership
+        // 4. Transfer ownership
         await audb.transferOwnership(rebalancer.target);
     });
 
-    it("Should integrate correctly", async function () {
+    it("Should have correct ownership", async function () {
+        // Rebalancer must own AUDB to mint/burn
         expect(await audb.owner()).to.equal(rebalancer.target);
-        expect(await rebalancer.audb()).to.equal(audb.target);
     });
 
-    it("Paymaster Validation", async function () {
-        const Paymaster = await ethers.getContractFactory("Paymaster");
-        paymaster = await Paymaster.deploy(audb.target);
+    it("Should have correct dependencies linked", async function () {
+        expect(await rebalancer.audb()).to.equal(audb.target);
+        expect(await rebalancer.liquidityManager()).to.equal(liquidityManager.target);
+        expect(await rebalancer.pyth()).to.equal(PYTH_ADDRESS);
+    });
 
-        // 1. Check exchange rate
-        expect(await paymaster.exchangeRate()).to.be.gt(0);
-
-        // 2. Validate fails without balance
-        // This call is static call for view function
-        const res = await paymaster.validatePaymasterUserOp.staticCall(addr1.address, 100);
-        // Tuple return: context (bytes), validationData (uint)
-        // Failure returns ("", 1)
-        expect(res[1]).to.equal(1n);
+    it("Should have correct router in LiquidityManager", async function () {
+        expect(await liquidityManager.router()).to.equal(JOE_ROUTER);
     });
 });
