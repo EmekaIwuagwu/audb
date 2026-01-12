@@ -1,0 +1,21 @@
+{
+  "name": "audb-stablecoin",
+  "version": "1.0.0",
+  "description": "Australian Dollar Backed Stablecoin",
+  "main": "index.js",
+  "scripts": {
+    "test": "npx hardhat test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "hardhat": "^2.19.0",
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "4.9.3",
+    "@pythnetwork/pyth-sdk-solidity": "^2.2.1",
+    "dotenv": "^16.3.1"
+  }
+}
