@@ -78,9 +78,6 @@ contract Rebalancer is Ownable, ReentrancyGuard {
     }
 
     function rebalance() external onlyOwner nonReentrant {
-        // Hybrid Price Check: Average of Oracle and DEX?
-        // Or Oracle is source of truth, DEX is target.
-        // We use Oracle for absolute peg.
         uint256 currentPrice = getOraclePrice();
 
         if (currentPrice > peg + deviationThreshold) {
