@@ -7,6 +7,13 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./interfaces/IJoeRouter02.sol";
 import "./AUDB.sol";
 
+interface IJoeFactory {
+    function getPair(
+        address tokenA,
+        address tokenB
+    ) external view returns (address pair);
+}
+
 interface ILiquidityManager {
     function manageSupplyExpansion(uint256 amount) external;
     function manageSupplyContraction(
