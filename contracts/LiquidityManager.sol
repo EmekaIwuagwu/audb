@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity 0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./interfaces/IJoeRouter02.sol";
 import "./AUDB.sol";
@@ -21,10 +22,23 @@ interface ILiquidityManager {
     ) external returns (uint256);
 }
 
+/**
+ * @title LiquidityManager - Protocol-Owned Liquidity Manager
+ * @notice Manages AUDB/USDC liquidity on Trader Joe
+ * @dev Implements slippage protection and emergency withdrawals
+ */
 contract LiquidityManager is Ownable, ReentrancyGuard, ILiquidityManager {
+    using SafeERC20 for IERC20;
+
     IJoeRouter02 public router;
     AUDB public audb;
     IERC20 public collateral; // e.g., USDC or WAVAX
+
+    /// @notice Maximum slippage tolerance (1% = 100 basis points)
+    uint256 public constant MAX_SLIPPAGE_BPS = 100;
+
+    /// @notice Deadline offset for DEX operations (5 minutes)
+    uint256 public constant DEADLINE_OFFSET = 300;
 
     event LiquidityAdded(
         uint256 audbAmount,
@@ -37,8 +51,13 @@ contract LiquidityManager is Ownable, ReentrancyGuard, ILiquidityManager {
         uint256 collateralAmount
     );
     event ExpansionManaged(uint256 audbAmount, uint256 collateralReceived);
+    event EmergencyWithdrawal(address indexed token, uint256 amount);
 
     constructor(address _router, address _audb, address _collateral) Ownable() {
+        require(_router != address(0), "LM: invalid router");
+        require(_audb != address(0), "LM: invalid AUDB");
+        require(_collateral != address(0), "LM: invalid collateral");
+
         router = IJoeRouter02(_router);
         audb = AUDB(_audb);
         collateral = IERC20(_collateral);
@@ -49,12 +68,18 @@ contract LiquidityManager is Ownable, ReentrancyGuard, ILiquidityManager {
     // 2. Swaps half for Collateral (USDC)
     // 3. Adds Liquidity (AUDB/USDC)
     // Result: Sell pressure on AUDB + Deeper Liquidity
+    /**
+     * @notice Manages supply expansion by selling AUDB and adding liquidity
+     * @param amount Amount of AUDB to manage
+     */
     function manageSupplyExpansion(
         uint256 amount
     ) external override onlyOwner nonReentrant {
+        require(amount > 0, "LM: zero amount");
+
         require(
             audb.transferFrom(msg.sender, address(this), amount),
-            "Transfer failed"
+            "LM: transfer failed"
         );
 
         uint256 half = amount / 2;
@@ -95,6 +120,11 @@ contract LiquidityManager is Ownable, ReentrancyGuard, ILiquidityManager {
         }
     }
 
+    /**
+     * @notice Swaps AUDB for collateral with slippage protection
+     * @param amountIn Amount of AUDB to swap
+     * @return Amount of collateral received
+     */
     function _swapAudbForCollateral(
         uint256 amountIn
     ) internal returns (uint256) {
@@ -104,16 +134,28 @@ contract LiquidityManager is Ownable, ReentrancyGuard, ILiquidityManager {
         path[0] = address(audb);
         path[1] = address(collateral);
 
+        // Get expected output amount
+        uint[] memory amountsOut = router.getAmountsOut(amountIn, path);
+
+        // Calculate minimum with 1% slippage protection
+        uint256 minCollateral = (amountsOut[1] * (10000 - MAX_SLIPPAGE_BPS)) /
+            10000;
+
         uint[] memory amounts = router.swapExactTokensForTokens(
             amountIn,
-            0, // Accept any amount of collateral for now (Production: Use oracle/min bounds)
+            minCollateral, // Slippage protection
             path,
             address(this),
-            block.timestamp
+            block.timestamp + DEADLINE_OFFSET
         );
         return amounts[1];
     }
 
+    /**
+     * @notice Adds liquidity to AUDB/Collateral pool
+     * @param audbAmount Amount of AUDB to add
+     * @param collateralAmount Amount of collateral to add
+     */
     function _addLiquidity(
         uint256 audbAmount,
         uint256 collateralAmount
@@ -121,18 +163,27 @@ contract LiquidityManager is Ownable, ReentrancyGuard, ILiquidityManager {
         audb.approve(address(router), audbAmount);
         collateral.approve(address(router), collateralAmount);
 
+        // Calculate minimum amounts with 1% slippage
+        uint256 minAudb = (audbAmount * (10000 - MAX_SLIPPAGE_BPS)) / 10000;
+        uint256 minCollateral = (collateralAmount *
+            (10000 - MAX_SLIPPAGE_BPS)) / 10000;
+
         router.addLiquidity(
             address(audb),
             address(collateral),
             audbAmount,
             collateralAmount,
-            0,
-            0,
+            minAudb,
+            minCollateral,
             address(this),
-            block.timestamp
+            block.timestamp + DEADLINE_OFFSET
         );
     }
 
+    /**
+     * @notice Removes liquidity from the pool
+     * @param lpAmount Amount of LP tokens to remove
+     */
     function _removeLiquidity(uint256 lpAmount) internal {
         address pair = _getPair();
         IERC20(pair).approve(address(router), lpAmount);
@@ -141,10 +192,10 @@ contract LiquidityManager is Ownable, ReentrancyGuard, ILiquidityManager {
             address(audb),
             address(collateral),
             lpAmount,
-            0,
+            0, // Emergency mode - accept any amount
             0,
             address(this),
-            block.timestamp
+            block.timestamp + DEADLINE_OFFSET
         );
     }
 
@@ -153,8 +204,42 @@ contract LiquidityManager is Ownable, ReentrancyGuard, ILiquidityManager {
         return IJoeFactory(factory).getPair(address(audb), address(collateral));
     }
 
-    // Admin functions to rescue tokens
+    /**
+     * @notice Emergency withdrawal of all liquidity
+     * @dev Only callable by owner in emergency situations
+     */
+    function emergencyRemoveAllLiquidity() external onlyOwner nonReentrant {
+        address pair = _getPair();
+        uint256 lpBalance = IERC20(pair).balanceOf(address(this));
+
+        if (lpBalance > 0) {
+            _removeLiquidity(lpBalance);
+        }
+
+        // Transfer all rescued tokens to owner
+        uint256 audbBal = audb.balanceOf(address(this));
+        uint256 colBal = collateral.balanceOf(address(this));
+
+        if (audbBal > 0)
+            require(
+                audb.transfer(msg.sender, audbBal),
+                "LM: AUDB transfer failed"
+            );
+        if (colBal > 0) collateral.safeTransfer(msg.sender, colBal);
+
+        emit EmergencyWithdrawal(address(audb), audbBal);
+        emit EmergencyWithdrawal(address(collateral), colBal);
+    }
+
+    /**
+     * @notice Admin function to rescue tokens
+     * @param token Token address to withdraw
+     * @param amount Amount to withdraw
+     */
     function withdraw(address token, uint256 amount) external onlyOwner {
-        IERC20(token).transfer(msg.sender, amount);
+        require(token != address(0), "LM: invalid token");
+        require(amount > 0, "LM: zero amount");
+        IERC20(token).safeTransfer(msg.sender, amount);
+        emit EmergencyWithdrawal(token, amount);
     }
 }
