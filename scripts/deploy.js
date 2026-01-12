@@ -70,7 +70,21 @@ async function main() {
     // Ideally, we should have minted BEFORE transfer.
     // Rebalancer has logic to mint if price is high.
 
-    // NOTE: In production, proper AccessControl is mandatory.
+    console.log("\n=== DEPLOYMENT COMPLETE ===");
+    console.log("AUDB:", audb.target);
+    console.log("LiquidityManager:", liquidityManager.target);
+    console.log("Rebalancer:", rebalancer.target);
+    console.log("Vault:", vault.target);
+    console.log("Paymaster:", paymaster.target);
+    console.log("===========================\n");
+
+    return {
+        audb: audb.target,
+        liquidityManager: liquidityManager.target,
+        rebalancer: rebalancer.target,
+        vault: vault.target,
+        paymaster: paymaster.target
+    };
 }
 
 main().catch((error) => {
