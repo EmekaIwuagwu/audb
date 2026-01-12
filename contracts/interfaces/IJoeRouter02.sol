@@ -36,6 +36,16 @@ interface IJoeRouter02 {
         uint deadline
     ) external returns (uint[] memory amounts);
 
+    function removeLiquidity(
+        address tokenA,
+        address tokenB,
+        uint liquidity,
+        uint amountAMin,
+        uint amountBMin,
+        address to,
+        uint deadline
+    ) external returns (uint amountA, uint amountB);
+
     function getAmountsOut(
         uint amountIn,
         address[] calldata path
